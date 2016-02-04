@@ -12,7 +12,7 @@
 
 @interface FRPCoreDataManager : NSObject
 
-@property (nonatomic, strong) NSManagedObjectContext *tempInMemoryObjectContext;
+@property (nonatomic, strong, readonly) NSManagedObjectContext *tempInMemoryObjectContext;
 
 @property (nonatomic, strong, readonly) NSManagedObjectContext *mainObjectContext;
 @property (nonatomic, strong, readonly) NSManagedObjectContext *concurrentObjectContext;
@@ -21,9 +21,12 @@
 @property (nonatomic, strong, readonly) NSPersistentStoreCoordinator *persistentStoreCoordinator;
 @property (nonatomic, strong, readonly) NSPersistentStore *persistentStore;
 
+- (NSManagedObjectContext *)concurrentObjectContextFromContext:(NSManagedObjectContext *)context;
 - (NSManagedObjectContext *)createNewManagedObjectContext;
 - (void)deleteAllDBContents;
 
-+ (FRPCoreDataManager *)sharedInstance;
++ (void)saveContext:(NSManagedObjectContext *)context;
+
++ (ARKCoreDataManager *)sharedInstance;
 
 @end

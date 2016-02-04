@@ -1,20 +1,22 @@
 //
 //  FRPCoreDataManager.m
 //
-//  Created by Francisco José Rodríguez Pérez on 12/06/12.
-//  Copyright (c) 2012. All rights reserved.
+//  Created by Francisco Rodríguez on 11/12/13.
+//  Copyright (c) 2013 Francisco Rodríguez. All rights reserved.
 //
 
 #import "FRPCoreDataManager.h"
 
-#define SAVE_TO_DISK_TIME_INTERVAL 0.6
+#define SAVE_TO_DISK_TIME_INTERVAL 0.3
 #define SQLITE_FILE_NAME @"store.sqlite"
 
 @interface FRPCoreDataManager ()
 
-@property (strong, nonatomic) NSManagedObjectContext *privateWriterContext; // tied to the persistent store coordinator
+@property (strong, nonatomic) NSManagedObjectContext *privateWriterContext; // managedObjectContext tied to the persistent store coordinator
 
 - (void)contextObjectsDidChange:(NSNotification *)notification;
+- (void)contextWillSave:(NSNotification *)notification;
+- (void)contextDidSave:(NSNotification *)notification;
 - (void)saveToDisk:(NSNotification *)notification;
 
 - (NSURL *)storeURL;
@@ -24,6 +26,7 @@
 @implementation FRPCoreDataManager
 
 @synthesize mainObjectContext = __mainObjectContext;
+@synthesize concurrentObjectContext = __concurrentObjectContext;
 @synthesize managedObjectModel = __managedObjectModel;
 @synthesize persistentStoreCoordinator = __persistentStoreCoordinator;
 @synthesize persistentStore = __persistentStore;
@@ -34,8 +37,8 @@ static FRPCoreDataManager *_sharedInstance;
     static dispatch_once_t onceToken;
 
     dispatch_once(&onceToken, ^{
-                      _sharedInstance = [[FRPCoreDataManager alloc] init];
-                  });
+        _sharedInstance = [[FRPCoreDataManager alloc] init];
+    });
     return _sharedInstance;
 }
 
@@ -82,6 +85,18 @@ static FRPCoreDataManager *_sharedInstance;
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:NSManagedObjectContextObjectsDidChangeNotification
                                                   object:self.mainObjectContext];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSManagedObjectContextWillSaveNotification
+                                                  object:self.mainObjectContext];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSManagedObjectContextDidSaveNotification
+                                                  object:self.mainObjectContext];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSManagedObjectContextWillSaveNotification
+                                                  object:self.concurrentObjectContext];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSManagedObjectContextDidSaveNotification
+                                                  object:self.concurrentObjectContext];
 
     NSError *error;
     [[self persistentStoreCoordinator] removePersistentStore:[self persistentStore] error:&error];
@@ -89,42 +104,75 @@ static FRPCoreDataManager *_sharedInstance;
 
     __persistentStoreCoordinator = nil;
     __mainObjectContext = nil;
+    __concurrentObjectContext = nil;
+}
+
++ (void)saveContext:(NSManagedObjectContext *)context
+{
+    [context performBlock:^{
+        if (context.hasChanges) {
+            NSError *error = nil;
+            BOOL success = [context save:&error];
+            if (success) {
+                CLS_LOG(@"Context saved");
+            } else {
+                CLS_LOG(@"ERROR saving context: %@", error);
+            }
+
+            if (context.parentContext) {
+                [self saveContext:context.parentContext];
+            }
+        }
+    }];
 }
 
 #pragma mark - Core Data stack
 
 - (NSManagedObjectContext *)tempInMemoryObjectContext
 {
-    if (!_tempInMemoryObjectContext) {
-        NSMutableDictionary *options = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
-                                        [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption,
-                                        [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption, nil];
-        NSError *error = nil;
-        NSPersistentStoreCoordinator *persistentStoreCoordinator = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel:[self managedObjectModel]];
-        [persistentStoreCoordinator addPersistentStoreWithType:NSInMemoryStoreType
-                                                 configuration:nil
-                                                           URL:[NSURL URLWithString:@"tempInMemoryStore"]
-                                                       options:options
-                                                         error:&error];
-        
-        _tempInMemoryObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
-        [_tempInMemoryObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
-        [_tempInMemoryObjectContext setPersistentStoreCoordinator:persistentStoreCoordinator];
-    }
-    
-    return _tempInMemoryObjectContext;
+    NSMutableDictionary *options = [[NSMutableDictionary alloc] initWithObjectsAndKeys:
+                                    [NSNumber numberWithBool:YES], NSMigratePersistentStoresAutomaticallyOption,
+                                    [NSNumber numberWithBool:YES], NSInferMappingModelAutomaticallyOption, nil];
+    NSError *error = nil;
+    NSPersistentStoreCoordinator *persistentStoreCoordinator = [[NSPersistentStoreCoordinator alloc] initWithManagedObjectModel:[self managedObjectModel]];
+    [persistentStoreCoordinator addPersistentStoreWithType:NSInMemoryStoreType
+                                             configuration:nil
+                                                       URL:[NSURL URLWithString:@"tempInMemoryStore"]
+                                                   options:options
+                                                     error:&error];
+
+    NSManagedObjectContext *tempInMemoryObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
+    [tempInMemoryObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
+    [tempInMemoryObjectContext setPersistentStoreCoordinator:persistentStoreCoordinator];
+
+    return tempInMemoryObjectContext;
 }
 
 - (NSManagedObjectContext *)mainObjectContext
 {
     if (__mainObjectContext == nil) {
-        __mainObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
-        [__mainObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
-        [__mainObjectContext setParentContext:self.privateWriterContext];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(contextObjectsDidChange:)
-                                                     name:NSManagedObjectContextObjectsDidChangeNotification
-                                                   object:__mainObjectContext];
+        void(^createMainObjContext)(void) = ^{
+            __mainObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSMainQueueConcurrencyType];
+            [__mainObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
+            [__mainObjectContext setParentContext:self.privateWriterContext];
+            [[NSNotificationCenter defaultCenter] addObserver:self
+                                                     selector:@selector(contextObjectsDidChange:)
+                                                         name:NSManagedObjectContextObjectsDidChangeNotification
+                                                       object:__mainObjectContext];
+            [[NSNotificationCenter defaultCenter] addObserver:self
+                                                     selector:@selector(contextWillSave:)
+                                                         name:NSManagedObjectContextWillSaveNotification
+                                                       object:__mainObjectContext];
+            [[NSNotificationCenter defaultCenter] addObserver:self
+                                                     selector:@selector(contextDidSave:)
+                                                         name:NSManagedObjectContextDidSaveNotification
+                                                       object:__mainObjectContext];
+        };
+        if (NSThread.isMainThread) {
+            createMainObjContext();
+        } else {
+            dispatch_sync(dispatch_get_main_queue(), createMainObjContext);
+        }
     }
 
     return __mainObjectContext;
@@ -132,10 +180,37 @@ static FRPCoreDataManager *_sharedInstance;
 
 - (NSManagedObjectContext *)concurrentObjectContext
 {
+    if (__concurrentObjectContext == nil) {
+        __concurrentObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSPrivateQueueConcurrencyType];
+
+        [__concurrentObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(contextWillSave:)
+                                                     name:NSManagedObjectContextWillSaveNotification
+                                                   object:__concurrentObjectContext];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(contextDidSave:)
+                                                     name:NSManagedObjectContextDidSaveNotification
+                                                   object:__concurrentObjectContext];
+        NSPersistentStoreCoordinator *coordinator = [self persistentStoreCoordinator];
+        [__concurrentObjectContext performBlockAndWait:^{
+            [__concurrentObjectContext setPersistentStoreCoordinator:coordinator];
+        }];
+    }
+
+    return __concurrentObjectContext;
+}
+
+- (NSManagedObjectContext *)concurrentObjectContextFromContext:(NSManagedObjectContext *)context
+{
     NSManagedObjectContext *concurrentObjectContext = [[NSManagedObjectContext alloc] initWithConcurrencyType:NSPrivateQueueConcurrencyType];
 
     [concurrentObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
-    [concurrentObjectContext setParentContext:self.mainObjectContext];
+    [concurrentObjectContext setParentContext:context];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(contextWillSave:)
+                                                 name:NSManagedObjectContextWillSaveNotification
+                                               object:concurrentObjectContext];
 
     return concurrentObjectContext;
 }
@@ -146,7 +221,11 @@ static FRPCoreDataManager *_sharedInstance;
     
     [tempMainObjectContext setMergePolicy:[[NSMergePolicy alloc] initWithMergeType:NSOverwriteMergePolicyType]];
     [tempMainObjectContext setParentContext:self.mainObjectContext];
-    
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(contextWillSave:)
+                                                 name:NSManagedObjectContextWillSaveNotification
+                                               object:tempMainObjectContext];
+
     return tempMainObjectContext;
 }
 
@@ -173,7 +252,7 @@ static FRPCoreDataManager *_sharedInstance;
                                                                              options:options
                                                                                error:&error];
         if (!__persistentStore) {
-            NSLog(@"Unresolved error %@, %@", error, [error userInfo]);
+            CLS_LOG(@"Unresolved error %@, %@", error, [error userInfo]);
 
             [[NSFileManager defaultManager] removeItemAtPath:[self storeURL].path error:&error];
 
@@ -218,10 +297,47 @@ static FRPCoreDataManager *_sharedInstance;
 
 - (void)contextObjectsDidChange:(NSNotification *)notification
 {
-    if (notification.object == self.mainObjectContext) {
+    NSManagedObjectContext *ctx = (NSManagedObjectContext *)notification.object;
+    if (ctx.insertedObjects.count > 0) {
+        NSError *error = nil;
+        [ctx obtainPermanentIDsForObjects:ctx.insertedObjects.allObjects error:&error];
+        if (error) {
+            CLS_LOG(@"contextObjectsDidChange: ERROR obtaining permanent ids for %@", ctx.insertedObjects);
+        }
+    }
+
+    if (ctx == self.mainObjectContext) {
         [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(saveToDisk:) object:nil];
 
         [self performSelector:@selector(saveToDisk:) withObject:nil afterDelay:SAVE_TO_DISK_TIME_INTERVAL];
+    }
+}
+
+- (void)contextWillSave:(NSNotification *)notification
+{
+    NSManagedObjectContext *ctx = (NSManagedObjectContext *)notification.object;
+    NSError *error = nil;
+    [ctx obtainPermanentIDsForObjects:ctx.insertedObjects.allObjects error:&error];
+    if (error) {
+        CLS_LOG(@"contextWillSave: ERROR obtaining permanent ids for %@", ctx.insertedObjects);
+    }
+}
+
+- (void)contextDidSave:(NSNotification *)notification
+{
+    NSManagedObjectContext *ctx = (NSManagedObjectContext *)notification.object;
+    if ([ctx isEqual:self.mainObjectContext]) {
+        [self.concurrentObjectContext performBlock:^{
+            [self.concurrentObjectContext mergeChangesFromContextDidSaveNotification:notification];
+        }];
+    } else {
+        [self.privateWriterContext performBlock:^{
+            [self.privateWriterContext mergeChangesFromContextDidSaveNotification:notification];
+            [self.mainObjectContext performBlock:^{
+                CLS_LOG(@"Merging changes from concurrent context into main context");
+                [self.mainObjectContext mergeChangesFromContextDidSaveNotification:notification];
+            }];
+        }];
     }
 }
 
@@ -232,25 +348,24 @@ static FRPCoreDataManager *_sharedInstance;
     NSError *error = nil;
     BOOL success = [self.mainObjectContext save:&error];
     if (success) {
-        NSLog(@"Main context saved");
+        CLS_LOG(@"Main context saved");
     } else {
-        NSLog(@"ERROR saving main context: %@", [error localizedDescription]);
-    }
-    
-    if (![savingContext.parentContext hasChanges]) {
-        return;
+        CLS_LOG(@"ERROR saving main context: %@", error);
     }
 
     void (^saveToDiskBlock)() = ^{
         [savingContext.parentContext performBlock:^{
-             NSError *error = nil;
-             BOOL success = [savingContext.parentContext save:&error];
-             if (success) {
-                 NSLog (@"Writer context saved to disk");
-             } else {
-                 NSLog (@"ERROR saving writer context: %@", [error localizedDescription]);
-             }
-         }];
+            if (![savingContext.parentContext hasChanges]) {
+                return;
+            }
+            NSError *error = nil;
+            BOOL success = [savingContext.parentContext save:&error];
+            if (success) {
+                CLS_LOG (@"Writer context saved to disk");
+            } else {
+                CLS_LOG (@"ERROR saving writer context: %@", error);
+            }
+        }];
     };
 
     if (notification) {
@@ -266,3 +381,4 @@ static FRPCoreDataManager *_sharedInstance;
 }
 
 @end
+
