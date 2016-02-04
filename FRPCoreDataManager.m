@@ -114,9 +114,9 @@ static FRPCoreDataManager *_sharedInstance;
             NSError *error = nil;
             BOOL success = [context save:&error];
             if (success) {
-                CLS_LOG(@"Context saved");
+                NSLog(@"Context saved");
             } else {
-                CLS_LOG(@"ERROR saving context: %@", error);
+                NSLog(@"ERROR saving context: %@", error);
             }
 
             if (context.parentContext) {
@@ -252,7 +252,7 @@ static FRPCoreDataManager *_sharedInstance;
                                                                              options:options
                                                                                error:&error];
         if (!__persistentStore) {
-            CLS_LOG(@"Unresolved error %@, %@", error, [error userInfo]);
+            NSLog(@"Unresolved error %@, %@", error, [error userInfo]);
 
             [[NSFileManager defaultManager] removeItemAtPath:[self storeURL].path error:&error];
 
@@ -302,7 +302,7 @@ static FRPCoreDataManager *_sharedInstance;
         NSError *error = nil;
         [ctx obtainPermanentIDsForObjects:ctx.insertedObjects.allObjects error:&error];
         if (error) {
-            CLS_LOG(@"contextObjectsDidChange: ERROR obtaining permanent ids for %@", ctx.insertedObjects);
+            NSLog(@"contextObjectsDidChange: ERROR obtaining permanent ids for %@", ctx.insertedObjects);
         }
     }
 
@@ -319,7 +319,7 @@ static FRPCoreDataManager *_sharedInstance;
     NSError *error = nil;
     [ctx obtainPermanentIDsForObjects:ctx.insertedObjects.allObjects error:&error];
     if (error) {
-        CLS_LOG(@"contextWillSave: ERROR obtaining permanent ids for %@", ctx.insertedObjects);
+        NSLog(@"contextWillSave: ERROR obtaining permanent ids for %@", ctx.insertedObjects);
     }
 }
 
@@ -334,7 +334,7 @@ static FRPCoreDataManager *_sharedInstance;
         [self.privateWriterContext performBlock:^{
             [self.privateWriterContext mergeChangesFromContextDidSaveNotification:notification];
             [self.mainObjectContext performBlock:^{
-                CLS_LOG(@"Merging changes from concurrent context into main context");
+                NSLog(@"Merging changes from concurrent context into main context");
                 [self.mainObjectContext mergeChangesFromContextDidSaveNotification:notification];
             }];
         }];
@@ -348,9 +348,9 @@ static FRPCoreDataManager *_sharedInstance;
     NSError *error = nil;
     BOOL success = [self.mainObjectContext save:&error];
     if (success) {
-        CLS_LOG(@"Main context saved");
+        NSLog(@"Main context saved");
     } else {
-        CLS_LOG(@"ERROR saving main context: %@", error);
+        NSLog(@"ERROR saving main context: %@", error);
     }
 
     void (^saveToDiskBlock)() = ^{
@@ -361,9 +361,9 @@ static FRPCoreDataManager *_sharedInstance;
             NSError *error = nil;
             BOOL success = [savingContext.parentContext save:&error];
             if (success) {
-                CLS_LOG (@"Writer context saved to disk");
+                NSLog(@"Writer context saved to disk");
             } else {
-                CLS_LOG (@"ERROR saving writer context: %@", error);
+                NSLog(@"ERROR saving writer context: %@", error);
             }
         }];
     };

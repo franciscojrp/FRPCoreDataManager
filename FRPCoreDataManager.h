@@ -27,6 +27,6 @@
 
 + (void)saveContext:(NSManagedObjectContext *)context;
 
-+ (ARKCoreDataManager *)sharedInstance;
++ (FRPCoreDataManager *)sharedInstance;
 
 @end
